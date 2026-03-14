@@ -14,7 +14,8 @@ set -eu
 export LC_ALL=C
 
 SCRIPT_NAME=$(basename "$0")
-VERSION="0.3.2"
+VERSION="0.3.3"
+UPDATE_URL="https://raw.githubusercontent.com/buildplan/dcm/refs/heads/main/docker-compose-manager.sh"
 
 # --- Terminal color support detection ---
 if [ -t 1 ]; then
@@ -59,6 +60,53 @@ check_dependency() {
     fi
 }
 
+# --- Self-Update function ---
+update_script() {
+    printf '%bInfo:%b Checking for updates...\n' "${BLUE}" "${RESET}"
+
+    script_path=$(command -v "$0" 2>/dev/null || echo "$0")
+
+    if [ ! -w "$script_path" ]; then
+        printf '%bError:%b No write permission to %b%s%b.\n' \
+            "${RED}" "${RESET}" "${CYAN}" "$script_path" "${RESET}" >&2
+        printf 'Try running with sudo: %b%s%b\n' "${YELLOW}" "sudo $SCRIPT_NAME update" "${RESET}" >&2
+        exit 1
+    fi
+
+    tmp_file="/tmp/dcm_update_$$"
+
+    # Download using curl or wget
+    if command -v curl >/dev/null 2>&1; then
+        if ! curl -sSL "$UPDATE_URL" -o "$tmp_file"; then
+            printf '%bError:%b Failed to download update via curl.\n' "${RED}" "${RESET}" >&2
+            exit 1
+        fi
+    elif command -v wget >/dev/null 2>&1; then
+        if ! wget -qO "$tmp_file" "$UPDATE_URL"; then
+             printf '%bError:%b Failed to download update via wget.\n' "${RED}" "${RESET}" >&2
+             exit 1
+        fi
+    else
+        printf '%bError:%b curl or wget is required to update.\n' "${RED}" "${RESET}" >&2
+        exit 1
+    fi
+
+    # Validate
+    if ! head -n 1 "$tmp_file" | grep -q "^#!/bin/sh"; then
+        printf '%bError:%b Downloaded file is invalid. Update aborted.\n' "${RED}" "${RESET}" >&2
+        rm -f "$tmp_file"
+        exit 1
+    fi
+
+    # Overwrite the current script using and make executable
+    cat "$tmp_file" > "$script_path"
+    chmod +x "$script_path"
+    rm -f "$tmp_file"
+
+    printf '%bSuccess:%b Script updated successfully!\n' "${GREEN}" "${RESET}"
+    exit 0
+}
+
 # --- Help and version ---
 print_help() {
     printf '%b%bUsage:%b\n' "${BOLD}" "${CYAN}" "${RESET}"
@@ -84,6 +132,7 @@ EOF
   -v, --version     Show version and exit.
   -n, --dry-run     Show what would be done without executing.
   -y, --yes         Skip confirmation prompts for destructive operations.
+  -u, --update      Update this script to the latest version from GitHub.
 EOF
 
     printf '\n%b%bActions:%b\n' "${BOLD}" "${CYAN}" "${RESET}"
@@ -94,6 +143,7 @@ EOF
   pull              Pull the latest images for the services.
   logs              Follow container logs (Ctrl+C moves to next dir).
   status            Show container status (docker compose ps).
+  update            Update this script to the latest version from GitHub.
 EOF
 
     printf '\n%b%bExamples:%b\n' "${BOLD}" "${CYAN}" "${RESET}"
@@ -304,6 +354,7 @@ while [ "$#" -gt 0 ]; do
         -v|--version) print_version; exit 0 ;;
         -n|--dry-run) DRY_RUN=1; shift ;;
         -y|--yes)     SKIP_CONFIRM=1; shift ;;
+        -u|--update)  update_script ;;
         -*)
             printf '%bError:%b unknown option %b%s%b\n' \
                 "${RED}" "${RESET}" "${CYAN}" "$1" "${RESET}" >&2
@@ -323,14 +374,18 @@ done
 
 # Interactive action prompt if not provided
 if [ -z "$ACTION" ]; then
-    printf 'Select action (up/down/restart/pull/logs/status): '
+    printf 'Select action (up/down/restart/pull/logs/status/update): '
     IFS= read -r ACTION || exit 1
     [ -z "$ACTION" ] && { print_help; exit 1; }
 fi
 
 # Validate action
 case "$ACTION" in
-    up|down|restart|status|pull|logs) ;;
+    up|down|restart|status|pull|logs|update)
+        if [ "$ACTION" = "update" ]; then
+            update_script
+        fi
+        ;;
     *)
         printf '%bError:%b invalid action %b%s%b\n' \
             "${RED}" "${RESET}" "${CYAN}" "$ACTION" "${RESET}" >&2
