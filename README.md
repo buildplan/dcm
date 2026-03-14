@@ -30,7 +30,7 @@ A POSIX-compliant shell script to manage Docker Compose projects across multiple
 Download directly to your system and make it executable:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/buildplan/dcm/refs/heads/main/docker-compose-manager.sh -o /usr/local/bin/dcm && chmod +x /usr/local/bin/dcm
+sudo curl -sSL https://raw.githubusercontent.com/buildplan/dcm/refs/heads/main/docker-compose-manager.sh -o /usr/local/bin/dcm && chmod +x /usr/local/bin/dcm
 ```
 
 ### Manual Install
