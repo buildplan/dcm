@@ -168,7 +168,7 @@ update_script() {
         exit 1
     fi
     chmod +x "$tmp_file"
-    if ! mv "$tmp_file" "$script_path"; then
+    if ! cp -f "$tmp_file" "$script_path" 2>/dev/null && ! cat "$tmp_file" > "$script_path"; then
         rm -rf "$temp_dir"
         error 'Failed to replace the current script.'
         exit 1
