@@ -242,8 +242,11 @@ $(printf '%s' "$override_list" | sort)
 EOF
     fi
 
-    COMPOSE_ARGS=$*
-    COMPOSE_BASE=$base_file
+    COMPOSE_ARGS=''
+    for arg do
+        COMPOSE_ARGS=${COMPOSE_ARGS}${COMPOSE_ARGS:+'
+'}$arg
+    done
     return 0
 }
 
@@ -269,9 +272,12 @@ run_compose_in_dir() {
     if ! build_compose_args "$dir"; then return 0; fi
     found_any=1
     set --
-    for token in $COMPOSE_ARGS; do
+    while IFS= read -r token; do
+        [ -n "$token" ] || continue
         set -- "$@" "$token"
-    done
+    done <<EOF
+$COMPOSE_ARGS
+EOF
     printf '%b------------------------------------------------%b\n' "$MAGENTA" "$RESET"
     printf '%b%bRunning:%b docker compose %b%s%b for %b%s%b\n' \
         "$BOLD" "$BLUE" "$RESET" \
