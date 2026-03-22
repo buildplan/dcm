@@ -92,35 +92,13 @@ EOF
 EOF
 }
 
-print_version() {
-    printf '%s %s\n' "$SCRIPT_NAME" "$VERSION"
-}
-
-info() {
-    printf '%bInfo:%b %s\n' "$BLUE" "$RESET" "$1"
-}
-
-warn() {
-    printf '%bWarning:%b %s\n' "$YELLOW" "$RESET" "$1" >&2
-}
-
-error() {
-    printf '%bError:%b %s\n' "$RED" "$RESET" "$1" >&2
-}
-
-check_dependency() {
-    if ! command -v docker >/dev/null 2>&1; then
-        error 'docker is not installed or not in PATH.'
-        exit 1
-    fi
-    if ! docker info >/dev/null 2>&1; then
-        error 'Docker daemon is not running.'
-        exit 1
-    fi
-    if ! docker compose version >/dev/null 2>&1; then
-        error 'docker compose not available. Install Docker Compose v2 (plugin).'
-        exit 1
-    fi
+print_version() { printf '%s %s\n' "$SCRIPT_NAME" "$VERSION"; }
+info() { printf '%bInfo:%b %s\n' "$BLUE" "$RESET" "$1"; }
+warn() { printf '%bWarning:%b %s\n' "$YELLOW" "$RESET" "$1" >&2; }
+error() { printf '%bError:%b %s\n' "$RED" "$RESET" "$1" >&2; }
+check_dependency() { if ! command -v docker >/dev/null 2>&1; then error 'docker is not installed or not in PATH.'; exit 1; fi
+    if ! docker info >/dev/null 2>&1; then error 'Docker daemon is not running.'; exit 1; fi
+    if ! docker compose version >/dev/null 2>&1; then error 'docker compose not available. Install Docker Compose v2 (plugin).'; exit 1; fi
 }
 
 resolve_script_path() {
@@ -132,12 +110,10 @@ resolve_script_path() {
 
 create_private_dir() {
     parent=$1
-
     if command -v mktemp >/dev/null 2>&1; then
         mktemp -d "$parent/.dcm-update.XXXXXX"
         return
     fi
-
     old_umask=$(umask)
     umask 077
     i=0
@@ -156,22 +132,18 @@ create_private_dir() {
 
 update_script() {
     info 'Checking for updates...'
-
     script_path=$(resolve_script_path)
     script_dir=$(dirname "$script_path")
-
     if [ ! -w "$script_dir" ]; then
         error "No write permission to directory $script_dir."
         printf 'Try running with sudo: %b%s%b\n' "$YELLOW" "sudo $SCRIPT_NAME update" "$RESET" >&2
         exit 1
     fi
-
     temp_dir=$(create_private_dir "$script_dir") || {
         error 'Failed to create a private temporary directory for update.'
         exit 1
     }
     tmp_file=$temp_dir/$SCRIPT_NAME.new
-
     if command -v curl >/dev/null 2>&1; then
         if ! curl -fsSL "$UPDATE_URL" -o "$tmp_file"; then
             rm -rf "$temp_dir"
@@ -195,7 +167,6 @@ update_script() {
         error 'Downloaded file is invalid. Update aborted.'
         exit 1
     fi
-
     chmod +x "$tmp_file"
     if ! mv "$tmp_file" "$script_path"; then
         rm -rf "$temp_dir"
@@ -203,7 +174,6 @@ update_script() {
         exit 1
     fi
     rm -rf "$temp_dir"
-
     printf '%bSuccess:%b Script updated successfully!\n' "$GREEN" "$RESET"
     exit 0
 }
@@ -236,20 +206,13 @@ find_base_file() {
     for name in compose.yaml compose.yml docker-compose.yaml docker-compose.yml; do
         if [ -f "$dir/$name" ]; then
             matches=$((matches + 1))
-            if [ -z "$selected" ]; then
-                selected=$dir/$name
-            fi
+            if [ -z "$selected" ]; then selected=$dir/$name; fi
         fi
     done
-
     if [ "$matches" -gt 1 ]; then
         warn "Multiple base compose files found in $(basename "$dir"); using $(basename "$selected")."
     fi
-
-    if [ -n "$selected" ]; then
-        printf '%s\n' "$selected"
-        return 0
-    fi
+    if [ -n "$selected" ]; then printf '%s\n' "$selected"; return 0; fi
     return 1
 }
 
@@ -257,7 +220,6 @@ build_compose_args() {
     dir=$1
     base_file=$(find_base_file "$dir") || return 1
     override_list=''
-
     for pattern in 'compose.*.yml' 'compose.*.yaml' 'docker-compose.*.yml' 'docker-compose.*.yaml'; do
         for f in "$dir"/$pattern; do
             [ -f "$f" ] || continue
@@ -270,7 +232,6 @@ build_compose_args() {
 '
         done
     done
-
     set -- -f "$base_file"
     if [ -n "$override_list" ]; then
         while IFS= read -r f; do
@@ -289,52 +250,34 @@ EOF
 print_used_files() {
     first=1
     for arg in "$@"; do
-        if [ "$arg" = '-f' ]; then
-            continue
-        fi
-        if [ "$first" -eq 1 ]; then
-            printf '%b%bUsing files:%b ' "$BOLD" "$CYAN" "$RESET"
-            first=0
-        fi
+        if [ "$arg" = '-f' ]; then continue; fi
+        if [ "$first" -eq 1 ]; then printf '%b%bUsing files:%b ' "$BOLD" "$CYAN" "$RESET"; first=0; fi
         printf '%s ' "$(basename "$arg")"
     done
-    if [ "$first" -eq 0 ]; then
-        printf '\n'
-    fi
+    if [ "$first" -eq 0 ]; then printf '\n'; fi
 }
 
 run_compose_in_dir() {
     dir=${1%/}
     folder_name=$(basename "$dir")
     cmd_success=0
-
     if [ ! -d "$dir" ]; then
         printf '%b------------------------------------------------%b\n' "$MAGENTA" "$RESET"
         error "directory $folder_name does not exist... skipping."
         return 1
     fi
-
-    if ! build_compose_args "$dir"; then
-        return 0
-    fi
-
+    if ! build_compose_args "$dir"; then return 0; fi
     found_any=1
-
     set --
     for token in $COMPOSE_ARGS; do
         set -- "$@" "$token"
     done
-
     printf '%b------------------------------------------------%b\n' "$MAGENTA" "$RESET"
     printf '%b%bRunning:%b docker compose %b%s%b for %b%s%b\n' \
         "$BOLD" "$BLUE" "$RESET" \
         "$GREEN" "$ACTION" "$RESET" \
         "$CYAN" "$folder_name" "$RESET"
-
-    if [ "$DRY_RUN" -eq 0 ]; then
-        print_used_files "$@"
-    fi
-
+    if [ "$DRY_RUN" -eq 0 ]; then print_used_files "$@"; fi
     if [ "$DRY_RUN" -eq 1 ]; then
         printf '%b[dry-run]%b docker compose' "$YELLOW" "$RESET"
         for arg in "$@"; do
@@ -388,11 +331,7 @@ run_compose_in_dir() {
 
 confirm_action() {
     target_desc=$1
-
-    if [ "$SKIP_CONFIRM" -eq 1 ] || [ ! -t 0 ]; then
-        return 0
-    fi
-
+    if [ "$SKIP_CONFIRM" -eq 1 ] || [ ! -t 0 ]; then return 0; fi
     case $ACTION in
         down|restart)
             printf '%b%bWarning:%b This will run %b%s%b on %s.\n' \
@@ -458,7 +397,6 @@ case $ACTION in
 esac
 
 if [ "$DRY_RUN" -eq 0 ]; then check_dependency; fi
-
 if [ "$#" -gt 0 ]; then
     confirm_action 'the specified Docker Compose project directories'
     for name in "$@"; do
@@ -475,13 +413,8 @@ else
         BASE_DIR=$(pwd)
     fi
 
-    if [ ! -d "$BASE_DIR" ]; then
-        error "$BASE_DIR is not a directory."
-        exit 1
-    fi
-
+    if [ ! -d "$BASE_DIR" ]; then error "$BASE_DIR is not a directory."; exit 1; fi
     load_config "$BASE_DIR"
-
     if [ -t 0 ]; then
         if [ -n "$EXCLUDES_INPUT" ]; then
             printf 'Current exclusions from config: %b%s%b\n' "$CYAN" "$EXCLUDES_INPUT" "$RESET"
