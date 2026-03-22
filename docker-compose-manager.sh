@@ -6,127 +6,64 @@
 #
 
 set -eu
-# Try to set pipefail if available (bash/zsh), ignore if strictly POSIX sh (dash)
 # shellcheck disable=SC3040
 (set -o pipefail 2>/dev/null) && set -o pipefail
 
-# Ensure standard sorting and character handling
 export LC_ALL=C
 
 SCRIPT_NAME=$(basename "$0")
-VERSION="0.3.3"
+VERSION="0.3.4"
 UPDATE_URL="https://raw.githubusercontent.com/buildplan/dcm/refs/heads/main/docker-compose-manager.sh"
 
-# --- Terminal color support detection ---
 if [ -t 1 ]; then
     RED='\033[31m' GREEN='\033[32m' YELLOW='\033[33m' BLUE='\033[34m' MAGENTA='\033[35m' CYAN='\033[36m' BOLD='\033[1m' RESET='\033[0m'
 else
     RED='' GREEN='' YELLOW='' BLUE='' MAGENTA='' CYAN='' BOLD='' RESET=''
 fi
 
-# --- Global state ---
 found_any=0
 exit_code=0
 DRY_RUN=0
-FAILED_DIRS=""
-SUCCESS_DIRS=""
+FAILED_DIRS=''
+SUCCESS_DIRS=''
 SKIP_CONFIRM=0
+EXCLUDES_INPUT=''
+ACTION=''
 
-# --- Signal handling for clean exit ---
 # shellcheck disable=SC2329
 cleanup() {
     exit_status=$?
     if [ "$exit_status" -eq 130 ]; then
-        printf '\n%bInterrupted. Exiting.%b\n' "${YELLOW}" "${RESET}"
+        printf '\n%bInterrupted. Exiting.%b\n' "$YELLOW" "$RESET"
     fi
     exit "$exit_status"
 }
 trap cleanup INT TERM
 
-# --- Dependency check ---
-check_dependency() {
-    if ! command -v docker >/dev/null 2>&1; then
-        printf '%bError:%b docker is not installed or not in PATH.\n' "${RED}" "${RESET}" >&2
-        exit 1
-    fi
-    if ! docker info >/dev/null 2>&1; then
-        printf '%bError:%b Docker daemon is not running.\n' "${RED}" "${RESET}" >&2
-        exit 1
-    fi
-    if ! docker compose version >/dev/null 2>&1; then
-        printf '%bError:%b docker compose not available. Install Docker Compose v2 (plugin).\n' \
-            "${RED}" "${RESET}" >&2
-        exit 1
-    fi
-}
-
-# --- Self-Update function ---
-update_script() {
-    printf '%bInfo:%b Checking for updates...\n' "${BLUE}" "${RESET}"
-
-    script_path=$(command -v "$0" 2>/dev/null || echo "$0")
-
-    if [ ! -w "$script_path" ]; then
-        printf '%bError:%b No write permission to %b%s%b.\n' \
-            "${RED}" "${RESET}" "${CYAN}" "$script_path" "${RESET}" >&2
-        printf 'Try running with sudo: %b%s%b\n' "${YELLOW}" "sudo $SCRIPT_NAME update" "${RESET}" >&2
-        exit 1
-    fi
-
-    tmp_file="/tmp/dcm_update_$$"
-
-    # Download using curl or wget
-    if command -v curl >/dev/null 2>&1; then
-        if ! curl -sSL "$UPDATE_URL" -o "$tmp_file"; then
-            printf '%bError:%b Failed to download update via curl.\n' "${RED}" "${RESET}" >&2
-            exit 1
-        fi
-    elif command -v wget >/dev/null 2>&1; then
-        if ! wget -qO "$tmp_file" "$UPDATE_URL"; then
-             printf '%bError:%b Failed to download update via wget.\n' "${RED}" "${RESET}" >&2
-             exit 1
-        fi
-    else
-        printf '%bError:%b curl or wget is required to update.\n' "${RED}" "${RESET}" >&2
-        exit 1
-    fi
-
-    # Validate
-    if ! head -n 1 "$tmp_file" | grep -q "^#!/bin/sh"; then
-        printf '%bError:%b Downloaded file is invalid. Update aborted.\n' "${RED}" "${RESET}" >&2
-        rm -f "$tmp_file"
-        exit 1
-    fi
-
-    # Overwrite the current script using and make executable
-    cat "$tmp_file" > "$script_path"
-    chmod +x "$script_path"
-    rm -f "$tmp_file"
-
-    printf '%bSuccess:%b Script updated successfully!\n' "${GREEN}" "${RESET}"
-    exit 0
-}
-
-# --- Help and version ---
 print_help() {
-    printf '%b%bUsage:%b\n' "${BOLD}" "${CYAN}" "${RESET}"
+    printf '%b%bUsage:%b\n' "$BOLD" "$CYAN" "$RESET"
     printf '  ./%s [OPTIONS] [ACTION] [DIR1 DIR2 ...]\n' "$SCRIPT_NAME"
     printf '  ./%s -h | --help\n' "$SCRIPT_NAME"
     printf '  ./%s -v | --version\n\n' "$SCRIPT_NAME"
 
-    printf '%b%bDescription:%b\n' "${BOLD}" "${CYAN}" "${RESET}"
+    printf '%b%bDescription:%b\n' "$BOLD" "$CYAN" "$RESET"
     cat <<'EOF'
   Run 'docker compose' (up/down/restart/status/pull/logs) in one or more directories.
-  Detects and merges compose files in deterministic order:
-    1. Standard files: compose.yml, docker-compose.yml
-    2. Pattern files (Sorted Alphabetically):
-       - compose-*.yml
-       - docker-compose-*.yml
-       - *-compose.yml (e.g., myapp-compose.yml)
-       - *_compose.yml (e.g., db_compose.yml)
+  Discovery is conservative and deterministic:
+    1. Choose one canonical base file, first match wins:
+       - compose.yaml
+       - compose.yml
+       - docker-compose.yaml
+       - docker-compose.yml
+    2. Layer explicit override files in sorted order:
+       - compose.*.yaml / compose.*.yml
+       - docker-compose.*.yaml / docker-compose.*.yml
+  Notes:
+    - Base filenames are never added twice as overrides.
+    - Relative paths are resolved from the base file Docker Compose sees first.
 EOF
 
-    printf '\n%b%bOptions:%b\n' "${BOLD}" "${CYAN}" "${RESET}"
+    printf '\n%b%bOptions:%b\n' "$BOLD" "$CYAN" "$RESET"
     cat <<EOF
   -h, --help        Show this help message and exit.
   -v, --version     Show version and exit.
@@ -135,18 +72,18 @@ EOF
   -u, --update      Update this script to the latest version from GitHub.
 EOF
 
-    printf '\n%b%bActions:%b\n' "${BOLD}" "${CYAN}" "${RESET}"
+    printf '\n%b%bActions:%b\n' "$BOLD" "$CYAN" "$RESET"
     cat <<EOF
   up                Start containers in detached mode.
   down              Stop and remove containers.
   restart           Restart containers (down + up) for clean config reload.
   pull              Pull the latest images for the services.
-  logs              Follow container logs (Ctrl+C moves to next dir).
+  logs              Follow container logs.
   status            Show container status (docker compose ps).
   update            Update this script to the latest version from GitHub.
 EOF
 
-    printf '\n%b%bExamples:%b\n' "${BOLD}" "${CYAN}" "${RESET}"
+    printf '\n%b%bExamples:%b\n' "$BOLD" "$CYAN" "$RESET"
     cat <<EOF
   ./$SCRIPT_NAME up
   ./$SCRIPT_NAME down dir1 dir2
@@ -159,7 +96,118 @@ print_version() {
     printf '%s %s\n' "$SCRIPT_NAME" "$VERSION"
 }
 
-# --- Exclusion check ---
+info() {
+    printf '%bInfo:%b %s\n' "$BLUE" "$RESET" "$1"
+}
+
+warn() {
+    printf '%bWarning:%b %s\n' "$YELLOW" "$RESET" "$1" >&2
+}
+
+error() {
+    printf '%bError:%b %s\n' "$RED" "$RESET" "$1" >&2
+}
+
+check_dependency() {
+    if ! command -v docker >/dev/null 2>&1; then
+        error 'docker is not installed or not in PATH.'
+        exit 1
+    fi
+    if ! docker info >/dev/null 2>&1; then
+        error 'Docker daemon is not running.'
+        exit 1
+    fi
+    if ! docker compose version >/dev/null 2>&1; then
+        error 'docker compose not available. Install Docker Compose v2 (plugin).'
+        exit 1
+    fi
+}
+
+resolve_script_path() {
+    case $0 in
+        */*) printf '%s\n' "$0" ;;
+        *) command -v "$0" 2>/dev/null || printf '%s\n' "$0" ;;
+    esac
+}
+
+create_private_dir() {
+    parent=$1
+
+    if command -v mktemp >/dev/null 2>&1; then
+        mktemp -d "$parent/.dcm-update.XXXXXX"
+        return
+    fi
+
+    old_umask=$(umask)
+    umask 077
+    i=0
+    while [ "$i" -lt 10 ]; do
+        i=$((i + 1))
+        candidate=$parent/.dcm-update.$$.$i
+        if mkdir "$candidate" 2>/dev/null; then
+            umask "$old_umask"
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    umask "$old_umask"
+    return 1
+}
+
+update_script() {
+    info 'Checking for updates...'
+
+    script_path=$(resolve_script_path)
+    script_dir=$(dirname "$script_path")
+
+    if [ ! -w "$script_dir" ]; then
+        error "No write permission to directory $script_dir."
+        printf 'Try running with sudo: %b%s%b\n' "$YELLOW" "sudo $SCRIPT_NAME update" "$RESET" >&2
+        exit 1
+    fi
+
+    temp_dir=$(create_private_dir "$script_dir") || {
+        error 'Failed to create a private temporary directory for update.'
+        exit 1
+    }
+    tmp_file=$temp_dir/$SCRIPT_NAME.new
+
+    if command -v curl >/dev/null 2>&1; then
+        if ! curl -fsSL "$UPDATE_URL" -o "$tmp_file"; then
+            rm -rf "$temp_dir"
+            error 'Failed to download update via curl.'
+            exit 1
+        fi
+    elif command -v wget >/dev/null 2>&1; then
+        if ! wget -qO "$tmp_file" "$UPDATE_URL"; then
+            rm -rf "$temp_dir"
+            error 'Failed to download update via wget.'
+            exit 1
+        fi
+    else
+        rm -rf "$temp_dir"
+        error 'curl or wget is required to update.'
+        exit 1
+    fi
+
+    if ! head -n 1 "$tmp_file" | grep -q '^#!/bin/sh'; then
+        rm -rf "$temp_dir"
+        error 'Downloaded file is invalid. Update aborted.'
+        exit 1
+    fi
+
+    chmod +x "$tmp_file"
+    if ! mv "$tmp_file" "$script_path"; then
+        rm -rf "$temp_dir"
+        error 'Failed to replace the current script.'
+        exit 1
+    fi
+    rm -rf "$temp_dir"
+
+    printf '%bSuccess:%b Script updated successfully!\n' "$GREEN" "$RESET"
+    exit 0
+}
+
 is_excluded() {
     case " $EXCLUDES_INPUT " in
         *" $1 "*) return 0 ;;
@@ -167,112 +215,132 @@ is_excluded() {
     esac
 }
 
-# --- Load config file if exists ---
 load_config() {
-    config_file="${1}/.docker-compose-manager.conf"
+    config_file=$1/.docker-compose-manager.conf
     if [ -f "$config_file" ]; then
-        printf '%bInfo:%b Loading exclusions from config file.\n' "${BLUE}" "${RESET}"
+        info 'Loading exclusions from config file.'
         while IFS= read -r line || [ -n "$line" ]; do
-            case "$line" in
+            case $line in
                 \#*|'') continue ;;
-                *) EXCLUDES_INPUT="${EXCLUDES_INPUT} ${line}" ;;
+                *) EXCLUDES_INPUT=${EXCLUDES_INPUT}${EXCLUDES_INPUT:+ }$line ;;
             esac
         done < "$config_file"
-        EXCLUDES_INPUT="${EXCLUDES_INPUT# }"
     fi
 }
 
-# --- Core: run compose in a directory ---
-run_compose_in_dir() {
-    dir="${1%/}"
-    folder_name=$(basename "$dir")
-    cmd_success=0
-    compose_files="|"
-    temp_file_list=""
+find_base_file() {
+    dir=$1
+    matches=0
+    selected=''
 
-    if [ ! -d "$dir" ]; then
-        printf '%b------------------------------------------------%b\n' "${MAGENTA}" "${RESET}"
-        printf '%bError:%b directory %b%s%b does not exist... skipping.\n' \
-            "${RED}" "${RESET}" "${CYAN}" "$folder_name" "${RESET}" >&2
-        return 1
-    fi
-
-    # --- Phase 1: Collect standard priority files (in specific order) ---
-    for f in "compose.yml" "compose.yaml" "docker-compose.yml" "docker-compose.yaml"; do
-        if [ -f "$dir/$f" ]; then
-            compose_files="${compose_files}${dir}/${f}|"
+    for name in compose.yaml compose.yml docker-compose.yaml docker-compose.yml; do
+        if [ -f "$dir/$name" ]; then
+            matches=$((matches + 1))
+            if [ -z "$selected" ]; then
+                selected=$dir/$name
+            fi
         fi
     done
 
-    # --- Phase 2: Collect pattern-based files for sorting ---
-    temp_file_list=""
-    for pattern in "compose-*.yml" "compose-*.yaml" \
-                   "docker-compose-*.yml" "docker-compose-*.yaml" \
-                   "*-compose.yml" "*-compose.yaml" \
-                   "*_compose.yml" "*_compose.yaml"; do
+    if [ "$matches" -gt 1 ]; then
+        warn "Multiple base compose files found in $(basename "$dir"); using $(basename "$selected")."
+    fi
 
+    if [ -n "$selected" ]; then
+        printf '%s\n' "$selected"
+        return 0
+    fi
+    return 1
+}
+
+build_compose_args() {
+    dir=$1
+    base_file=$(find_base_file "$dir") || return 1
+    override_list=''
+
+    for pattern in 'compose.*.yml' 'compose.*.yaml' 'docker-compose.*.yml' 'docker-compose.*.yaml'; do
         for f in "$dir"/$pattern; do
             [ -f "$f" ] || continue
-            case "$compose_files" in
-                *"|${f}|"*) continue ;;
-                *)
-                    temp_file_list="${temp_file_list}${f}
-"
+            case $(basename "$f") in
+                compose.yml|compose.yaml|docker-compose.yml|docker-compose.yaml)
+                    continue
                     ;;
             esac
+            override_list=${override_list}${f}'
+'
         done
     done
 
-    if [ -n "$temp_file_list" ]; then
+    set -- -f "$base_file"
+    if [ -n "$override_list" ]; then
         while IFS= read -r f; do
-            [ -n "$f" ] && compose_files="${compose_files}${f}|"
+            [ -n "$f" ] || continue
+            set -- "$@" -f "$f"
         done <<EOF
-$(printf '%s' "$temp_file_list" | sort)
+$(printf '%s' "$override_list" | sort)
 EOF
     fi
 
-    # No compose files found
-    if [ "$compose_files" = "|" ]; then
+    COMPOSE_ARGS=$*
+    COMPOSE_BASE=$base_file
+    return 0
+}
+
+print_used_files() {
+    first=1
+    for arg in "$@"; do
+        if [ "$arg" = '-f' ]; then
+            continue
+        fi
+        if [ "$first" -eq 1 ]; then
+            printf '%b%bUsing files:%b ' "$BOLD" "$CYAN" "$RESET"
+            first=0
+        fi
+        printf '%s ' "$(basename "$arg")"
+    done
+    if [ "$first" -eq 0 ]; then
+        printf '\n'
+    fi
+}
+
+run_compose_in_dir() {
+    dir=${1%/}
+    folder_name=$(basename "$dir")
+    cmd_success=0
+
+    if [ ! -d "$dir" ]; then
+        printf '%b------------------------------------------------%b\n' "$MAGENTA" "$RESET"
+        error "directory $folder_name does not exist... skipping."
+        return 1
+    fi
+
+    if ! build_compose_args "$dir"; then
         return 0
     fi
 
     found_any=1
 
-    # --- Build argument list from collected files ---
     set --
-    old_opts=$(set +o)
-    set -f
-    IFS='|'
-    # shellcheck disable=SC2086
-    for f in $compose_files; do
-        if [ -n "$f" ]; then
-            set -- "$@" -f "$f"
-        fi
+    for token in $COMPOSE_ARGS; do
+        set -- "$@" "$token"
     done
-    unset IFS
-    eval "$old_opts"
 
-    printf '%b------------------------------------------------%b\n' "${MAGENTA}" "${RESET}"
+    printf '%b------------------------------------------------%b\n' "$MAGENTA" "$RESET"
     printf '%b%bRunning:%b docker compose %b%s%b for %b%s%b\n' \
-        "${BOLD}" "${BLUE}" "${RESET}" \
-        "${GREEN}" "$ACTION" "${RESET}" \
-        "${CYAN}" "$folder_name" "${RESET}"
+        "$BOLD" "$BLUE" "$RESET" \
+        "$GREEN" "$ACTION" "$RESET" \
+        "$CYAN" "$folder_name" "$RESET"
 
-    # Verbose file listing
     if [ "$DRY_RUN" -eq 0 ]; then
-        printf '%b%bUsing files:%b ' "${BOLD}" "${CYAN}" "${RESET}"
-        for arg in "$@"; do
-            if [ "$arg" != "-f" ]; then
-                printf '%s ' "$(basename "$arg")"
-            fi
-        done
-        printf '\n'
+        print_used_files "$@"
     fi
-    # Dry-run output
+
     if [ "$DRY_RUN" -eq 1 ]; then
-        printf '%b[dry-run]%b docker compose' "${YELLOW}" "${RESET}"
-        for arg in "$@"; do printf ' %s' "$arg"; done
-        case "$ACTION" in
+        printf '%b[dry-run]%b docker compose' "$YELLOW" "$RESET"
+        for arg in "$@"; do
+            printf ' %s' "$arg"
+        done
+        case $ACTION in
             up)      printf ' up -d --remove-orphans\n' ;;
             down)    printf ' down --remove-orphans\n' ;;
             restart) printf ' down --remove-orphans && docker compose ... up -d --remove-orphans\n' ;;
@@ -283,55 +351,55 @@ EOF
         return 0
     fi
 
-    set -- "--project-directory" "$dir" "$@"
+    set -- --project-directory "$dir" "$@"
 
-    # --- Execute action ---
-    cmd_success=0
-    case "$ACTION" in
+    case $ACTION in
         up)
             if docker compose "$@" up -d --remove-orphans; then cmd_success=1; fi ;;
         down)
             if docker compose "$@" down --remove-orphans; then cmd_success=1; fi ;;
         restart)
-            if docker compose "$@" down --remove-orphans; then
-                if docker compose "$@" up -d --remove-orphans; then
-                    cmd_success=1
-                fi
+            if docker compose "$@" down --remove-orphans && \
+               docker compose "$@" up -d --remove-orphans; then
+                cmd_success=1
             fi
             ;;
         pull)
             if docker compose "$@" pull; then cmd_success=1; fi ;;
         logs)
-            docker compose "$@" logs -f || true
-            cmd_success=1
-            ;;
+            docker compose "$@" logs -f
+            rc=$?
+            if [ "$rc" -eq 0 ] || [ "$rc" -eq 130 ]; then cmd_success=1; fi ;;
         status)
-            if docker compose "$@" ps; then cmd_success=1; fi ;;
+            if docker compose "$@" ps; then
+                cmd_success=1
+            fi
+            ;;
     esac
 
     if [ "$cmd_success" -eq 1 ]; then
-        SUCCESS_DIRS="${SUCCESS_DIRS} ${folder_name}"
+        SUCCESS_DIRS=${SUCCESS_DIRS}${SUCCESS_DIRS:+ }$folder_name
     else
-        printf '%bFailed to execute %s for %s%b\n' \
-            "${RED}" "$ACTION" "$folder_name" "${RESET}" >&2
-        FAILED_DIRS="${FAILED_DIRS} ${folder_name}"
+        error "Failed to execute $ACTION for $folder_name"
+        FAILED_DIRS=${FAILED_DIRS}${FAILED_DIRS:+ }$folder_name
         exit_code=1
     fi
 }
 
-# --- Confirmation prompt for destructive operations ---
 confirm_action() {
+    target_desc=$1
+
     if [ "$SKIP_CONFIRM" -eq 1 ] || [ ! -t 0 ]; then
         return 0
     fi
-    case "$ACTION" in
-        down|restart)
-            printf '%b%bWarning:%b This will %s all discovered Docker Compose projects.\n' \
-                "${BOLD}" "${YELLOW}" "${RESET}" "$ACTION"
-            printf 'Continue? (y/N): '
 
+    case $ACTION in
+        down|restart)
+            printf '%b%bWarning:%b This will run %b%s%b on %s.\n' \
+                "$BOLD" "$YELLOW" "$RESET" "$CYAN" "$ACTION" "$RESET" "$target_desc"
+            printf 'Continue? (y/N): '
             IFS= read -r confirm || return 1
-            case "$confirm" in
+            case $confirm in
                 y|Y|yes|YES) return 0 ;;
                 *)
                     printf 'Operation cancelled.\n'
@@ -342,130 +410,117 @@ confirm_action() {
     esac
 }
 
-# --- Argument parsing ---
-check_dependency
-
-ACTION=""
-EXCLUDES_INPUT=""
-
 while [ "$#" -gt 0 ]; do
-    case "$1" in
+    case $1 in
         -h|--help)    print_help; exit 0 ;;
         -v|--version) print_version; exit 0 ;;
         -n|--dry-run) DRY_RUN=1; shift ;;
         -y|--yes)     SKIP_CONFIRM=1; shift ;;
         -u|--update)  update_script ;;
         -*)
-            printf '%bError:%b unknown option %b%s%b\n' \
-                "${RED}" "${RESET}" "${CYAN}" "$1" "${RESET}" >&2
+            error "unknown option $1"
             print_help
             exit 1
             ;;
         *)
             if [ -z "$ACTION" ]; then
-                ACTION="$1"
+                ACTION=$1
+                shift
             else
                 break
             fi
-            shift
             ;;
     esac
 done
 
-# Interactive action prompt if not provided
 if [ -z "$ACTION" ]; then
-    printf 'Select action (up/down/restart/pull/logs/status/update): '
-    IFS= read -r ACTION || exit 1
-    [ -z "$ACTION" ] && { print_help; exit 1; }
+    if [ -t 0 ]; then
+        printf 'Select action (up/down/restart/pull/logs/status/update): '
+        IFS= read -r ACTION || exit 1
+        [ -n "$ACTION" ] || { print_help; exit 1; }
+    else
+        print_help
+        exit 1
+    fi
 fi
 
-# Validate action
-case "$ACTION" in
-    up|down|restart|status|pull|logs|update)
-        if [ "$ACTION" = "update" ]; then
-            update_script
-        fi
+case $ACTION in
+    up|down|restart|status|pull|logs)
+        ;;
+    update)
+        update_script
         ;;
     *)
-        printf '%bError:%b invalid action %b%s%b\n' \
-            "${RED}" "${RESET}" "${CYAN}" "$ACTION" "${RESET}" >&2
+        error "invalid action $ACTION"
         print_help
         exit 1
         ;;
 esac
 
-# --- Execution ---
+if [ "$DRY_RUN" -eq 0 ]; then check_dependency; fi
+
 if [ "$#" -gt 0 ]; then
-    # Direct directory arguments provided
+    confirm_action 'the specified Docker Compose project directories'
     for name in "$@"; do
         run_compose_in_dir "$name" || true
     done
 else
-    # Interactive Directory Scan Mode
     if [ -t 1 ]; then
-        printf '%b%bInteractive mode%b\n' "${BOLD}" "${CYAN}" "${RESET}"
+        printf '%b%bInteractive mode%b\n' "$BOLD" "$CYAN" "$RESET"
         printf 'Base directory to scan [%s]: ' "$(pwd)"
     fi
-    # Read base dir, default to pwd if empty
-    IFS= read -r BASE_DIR || BASE_DIR=""
+
+    IFS= read -r BASE_DIR || BASE_DIR=''
     if [ -z "$BASE_DIR" ]; then
-        BASE_DIR="$(pwd)"
+        BASE_DIR=$(pwd)
     fi
+
     if [ ! -d "$BASE_DIR" ]; then
-        printf '%bError:%b %b%s%b is not a directory.\n' \
-            "${RED}" "${RESET}" "${CYAN}" "$BASE_DIR" "${RESET}" >&2
+        error "$BASE_DIR is not a directory."
         exit 1
     fi
 
-    # Load config file exclusions if exists
     load_config "$BASE_DIR"
 
-    # Interactive exclusion input
     if [ -t 0 ]; then
         if [ -n "$EXCLUDES_INPUT" ]; then
-            printf 'Current exclusions from config: %b%s%b\n' \
-                "${CYAN}" "$EXCLUDES_INPUT" "${RESET}"
+            printf 'Current exclusions from config: %b%s%b\n' "$CYAN" "$EXCLUDES_INPUT" "$RESET"
             printf 'Additional folders to exclude (space-separated, or press Enter): '
         else
             printf 'Folders to exclude (space-separated names, or press Enter): '
         fi
         IFS= read -r extra_excludes || true
         if [ -n "$extra_excludes" ]; then
-            EXCLUDES_INPUT="${EXCLUDES_INPUT} ${extra_excludes}"
+            EXCLUDES_INPUT=${EXCLUDES_INPUT}${EXCLUDES_INPUT:+ }$extra_excludes
         fi
     fi
 
-    # Confirmation prompt before executing on multiple directories
-    confirm_action
+    confirm_action "all discovered Docker Compose projects under $BASE_DIR"
 
-    # Scan and execute
     for dir in "$BASE_DIR"/*/; do
         [ -d "$dir" ] || continue
-        dir="${dir%/}"
+        dir=${dir%/}
         folder_name=$(basename "$dir")
         if is_excluded "$folder_name"; then
-            printf '%b------------------------------------------------%b\n' "${MAGENTA}" "${RESET}"
+            printf '%b------------------------------------------------%b\n' "$MAGENTA" "$RESET"
             printf '%bSkipping excluded folder:%b %b%s%b\n' \
-                "${YELLOW}" "${RESET}" "${CYAN}" "$folder_name" "${RESET}"
+                "$YELLOW" "$RESET" "$CYAN" "$folder_name" "$RESET"
             continue
         fi
         run_compose_in_dir "$dir" || true
     done
 fi
 
-# --- Summary ---
 if [ "$found_any" -eq 0 ]; then
-    printf '\n%bNo subdirectories with compose files found.%b\n' "${YELLOW}" "${RESET}"
+    printf '\n%bNo subdirectories with a canonical base compose file found.%b\n' "$YELLOW" "$RESET"
 else
-    if [ "$ACTION" != "logs" ]; then
-        printf '\n%b%b=== Summary ===%b\n' "${BOLD}" "${MAGENTA}" "${RESET}"
+    if [ "$ACTION" != 'logs' ]; then
+        printf '\n%b%b=== Summary ===%b\n' "$BOLD" "$MAGENTA" "$RESET"
         if [ -n "$SUCCESS_DIRS" ]; then
-            SUCCESS_DIRS="${SUCCESS_DIRS# }"
-            printf '%b  [OK] Success:%b %s\n' "${GREEN}" "${RESET}" "$SUCCESS_DIRS"
+            printf '%b  [OK] Success:%b %s\n' "$GREEN" "$RESET" "$SUCCESS_DIRS"
         fi
         if [ -n "$FAILED_DIRS" ]; then
-            FAILED_DIRS="${FAILED_DIRS# }"
-            printf '%b  [!!] Failed:%b  %s\n' "${RED}" "${RESET}" "$FAILED_DIRS"
+            printf '%b  [!!] Failed:%b  %s\n' "$RED" "$RESET" "$FAILED_DIRS"
         fi
         printf '\n'
     fi
