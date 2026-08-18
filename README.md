@@ -11,6 +11,7 @@ A POSIX-compliant shell script to manage Docker Compose projects across multiple
 - **Exclusion Filtering**: Skip specific directories during batch operations
 - **Dry-Run Mode**: Preview commands before execution
 - **Summary Reports**: See which directories succeeded or failed after execution
+- **Startup Priority**: Define execution order for dependent projects (e.g., networks first)
 - **TTY-Aware Colors**: Colored output when run interactively, clean output for scripts/cron
 - **POSIX Compliant**: Works with `dash`, `bash --posix`, and other POSIX shells
 
@@ -76,7 +77,10 @@ dcm [OPTIONS] [ACTION] [DIR1 DIR2 ...]
 - `up` - Start containers in detached mode
 - `down` - Stop and remove containers
 - `restart` - Restart containers (down + up)
+- `pull` - Pull the latest images for the services
+- `logs` - Follow container logs
 - `status` - Show container status
+- `update` - Update this script to the latest version
 
 
 ### Options
@@ -84,6 +88,9 @@ dcm [OPTIONS] [ACTION] [DIR1 DIR2 ...]
 - `-h, --help` - Show help message and exit
 - `-v, --version` - Show version and exit
 - `-n, --dry-run` - Show what would be done without executing
+- `-y, --yes` - Skip confirmation prompts for destructive operations
+- `-p, --priority` - List of directories to start first (e.g., `-p "network proxy"`)
+- `-u, --update` - Update this script to the latest version from GitHub
 
 
 ### Interactive Mode
@@ -126,6 +133,21 @@ dcm status /home/user/docker --exclude dir1 dir2
 
 # Use with cron (no colors, clean output)
 0 3 * * * /usr/local/bin/dcm down /home/user/backup-projects
+```
+
+---
+
+## Configuration File
+
+You can create a `.docker-compose-manager.conf` file in your scan directory to store persistent settings and exclusions:
+
+```ini
+# Specify priority directories to process first
+PRIORITY="custom-network proxy"
+
+# Any other line is treated as a directory to exclude
+ignore-this-folder
+deprecated-app
 ```
 
 ---
