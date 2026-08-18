@@ -14,7 +14,7 @@ set -eu
 export LC_ALL=C
 
 SCRIPT_NAME="${0##*/}"
-VERSION="0.3.3"
+VERSION="0.3.4"
 UPDATE_URL="https://raw.githubusercontent.com/buildplan/dcm/refs/heads/main/docker-compose-manager.sh"
 
 # --- Terminal color support detection ---
