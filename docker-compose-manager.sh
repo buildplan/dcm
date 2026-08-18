@@ -118,12 +118,12 @@ print_help() {
     cat <<'EOF'
   Run 'docker compose' (up/down/restart/status/pull/logs) in one or more directories.
   Detects and merges compose files in deterministic order:
-    1. Standard files: compose.yml, docker-compose.yml
+    1. Standard files: compose.yml/yaml, docker-compose.yml/yaml
     2. Pattern files (Sorted Alphabetically):
-       - compose-*.yml
-       - docker-compose-*.yml
-       - *-compose.yml (e.g., myapp-compose.yml)
-       - *_compose.yml (e.g., db_compose.yml)
+       - compose-*.yml/yaml
+       - docker-compose-*.yml/yaml
+       - *-compose.yml/yaml (e.g., myapp-compose.yml)
+       - *_compose.yml/yaml (e.g., db_compose.yml)
 EOF
 
     printf '\n%b%bOptions:%b\n' "${BOLD}" "${CYAN}" "${RESET}"
