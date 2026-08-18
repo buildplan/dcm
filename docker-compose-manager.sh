@@ -13,7 +13,7 @@ set -eu
 # Ensure standard sorting and character handling
 export LC_ALL=C
 
-SCRIPT_NAME=$(basename "$0")
+SCRIPT_NAME="${0##*/}"
 VERSION="0.3.3"
 UPDATE_URL="https://raw.githubusercontent.com/buildplan/dcm/refs/heads/main/docker-compose-manager.sh"
 
@@ -73,7 +73,7 @@ update_script() {
         exit 1
     fi
 
-    tmp_file="/tmp/dcm_update_$$"
+    tmp_file="$(mktemp 2>/dev/null || echo /tmp/dcm_update_$$)"
 
     # Download using curl or wget
     if command -v curl >/dev/null 2>&1; then
@@ -185,7 +185,7 @@ load_config() {
 # --- Core: run compose in a directory ---
 run_compose_in_dir() {
     dir="${1%/}"
-    folder_name=$(basename "$dir")
+    folder_name="${dir##*/}"
     cmd_success=0
     compose_files="|"
     temp_file_list=""
@@ -263,7 +263,7 @@ EOF
         printf '%b%bUsing files:%b ' "${BOLD}" "${CYAN}" "${RESET}"
         for arg in "$@"; do
             if [ "$arg" != "-f" ]; then
-                printf '%s ' "$(basename "$arg")"
+                printf '%s ' "${arg##*/}"
             fi
         done
         printf '\n'
@@ -374,8 +374,14 @@ done
 
 # Interactive action prompt if not provided
 if [ -z "$ACTION" ]; then
-    printf 'Select action (up/down/restart/pull/logs/status/update): '
-    IFS= read -r ACTION || exit 1
+    if [ -t 0 ]; then
+        printf 'Select action (up/down/restart/pull/logs/status/update): '
+        IFS= read -r ACTION || exit 1
+    else
+        printf '%bError:%b Action must be specified in non-interactive mode.\n' "${RED}" "${RESET}" >&2
+        print_help
+        exit 1
+    fi
     [ -z "$ACTION" ] && { print_help; exit 1; }
 fi
 
@@ -402,14 +408,18 @@ if [ "$#" -gt 0 ]; then
     done
 else
     # Interactive Directory Scan Mode
-    if [ -t 1 ]; then
-        printf '%b%bInteractive mode%b\n' "${BOLD}" "${CYAN}" "${RESET}"
-        printf 'Base directory to scan [%s]: ' "$(pwd)"
+    if [ -t 0 ]; then
+        if [ -t 1 ]; then
+            printf '%b%bInteractive mode%b\n' "${BOLD}" "${CYAN}" "${RESET}"
+            printf 'Base directory to scan [%s]: ' "${PWD:-$(pwd)}"
+        fi
+        # Read base dir, default to pwd if empty
+        IFS= read -r BASE_DIR || BASE_DIR=""
+    else
+        BASE_DIR=""
     fi
-    # Read base dir, default to pwd if empty
-    IFS= read -r BASE_DIR || BASE_DIR=""
     if [ -z "$BASE_DIR" ]; then
-        BASE_DIR="$(pwd)"
+        BASE_DIR="${PWD:-$(pwd)}"
     fi
     if [ ! -d "$BASE_DIR" ]; then
         printf '%bError:%b %b%s%b is not a directory.\n' \
@@ -442,7 +452,7 @@ else
     for dir in "$BASE_DIR"/*/; do
         [ -d "$dir" ] || continue
         dir="${dir%/}"
-        folder_name=$(basename "$dir")
+        folder_name="${dir##*/}"
         if is_excluded "$folder_name"; then
             printf '%b------------------------------------------------%b\n' "${MAGENTA}" "${RESET}"
             printf '%bSkipping excluded folder:%b %b%s%b\n' \
