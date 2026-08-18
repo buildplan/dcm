@@ -14,7 +14,7 @@ set -eu
 export LC_ALL=C
 
 SCRIPT_NAME="${0##*/}"
-VERSION="0.3.5"
+VERSION="0.4.0"
 UPDATE_URL="https://raw.githubusercontent.com/buildplan/dcm/refs/heads/main/docker-compose-manager.sh"
 
 # --- Terminal color support detection ---
@@ -31,6 +31,8 @@ DRY_RUN=0
 FAILED_DIRS=""
 SUCCESS_DIRS=""
 SKIP_CONFIRM=0
+PRIORITY_DIRS=""
+PROCESSED_DIRS="|"
 
 # --- Signal handling for clean exit ---
 # shellcheck disable=SC2329
@@ -132,6 +134,7 @@ EOF
   -v, --version     Show version and exit.
   -n, --dry-run     Show what would be done without executing.
   -y, --yes         Skip confirmation prompts for destructive operations.
+  -p, --priority    List of directories to start first (e.g., -p "network proxy").
   -u, --update      Update this script to the latest version from GitHub.
 EOF
 
@@ -171,14 +174,24 @@ is_excluded() {
 load_config() {
     config_file="${1}/.docker-compose-manager.conf"
     if [ -f "$config_file" ]; then
-        printf '%bInfo:%b Loading exclusions from config file.\n' "${BLUE}" "${RESET}"
+        printf '%bInfo:%b Loading config from %b%s%b.\n' "${BLUE}" "${RESET}" "${CYAN}" "${config_file##*/}" "${RESET}"
         while IFS= read -r line || [ -n "$line" ]; do
             case "$line" in
                 \#*|'') continue ;;
+                PRIORITY=*)
+                    raw_val="${line#PRIORITY=}"
+                    # Strip basic quotes if present
+                    raw_val="${raw_val%\"}"
+                    raw_val="${raw_val#\"}"
+                    raw_val="${raw_val%\'}"
+                    raw_val="${raw_val#\'}"
+                    PRIORITY_DIRS="${PRIORITY_DIRS} ${raw_val}"
+                    ;;
                 *) EXCLUDES_INPUT="${EXCLUDES_INPUT} ${line}" ;;
             esac
         done < "$config_file"
         EXCLUDES_INPUT="${EXCLUDES_INPUT# }"
+        PRIORITY_DIRS="${PRIORITY_DIRS# }"
     fi
 }
 
@@ -354,6 +367,16 @@ while [ "$#" -gt 0 ]; do
         -v|--version) print_version; exit 0 ;;
         -n|--dry-run) DRY_RUN=1; shift ;;
         -y|--yes)     SKIP_CONFIRM=1; shift ;;
+        -p|--priority)
+            if [ -n "${2:-}" ]; then
+                PRIORITY_DIRS="${PRIORITY_DIRS} $2"
+                shift 2
+            else
+                printf '%bError:%b %s requires an argument.\n' "${RED}" "${RESET}" "$1" >&2
+                print_help
+                exit 1
+            fi
+            ;;
         -u|--update)  update_script ;;
         -*)
             printf '%bError:%b unknown option %b%s%b\n' \
@@ -449,10 +472,42 @@ else
     confirm_action
 
     # Scan and execute
+
+    # Phase 1: Process priority directories
+    if [ -n "$PRIORITY_DIRS" ]; then
+        set -f
+        # shellcheck disable=SC2086
+        for p_dir in $PRIORITY_DIRS; do
+            set +f
+            p_dir="${p_dir%/}"
+            target_dir="$BASE_DIR/$p_dir"
+
+            if [ -d "$target_dir" ]; then
+                if is_excluded "$p_dir"; then
+                    continue
+                fi
+                run_compose_in_dir "$target_dir" || true
+                PROCESSED_DIRS="${PROCESSED_DIRS}${p_dir}|"
+            else
+                printf '%bWarning:%b Priority directory %b%s%b not found in base path.\n' \
+                    "${YELLOW}" "${RESET}" "${CYAN}" "$p_dir" "${RESET}" >&2
+            fi
+            set -f
+        done
+        set +f
+    fi
+
+    # Phase 2: Process the rest
     for dir in "$BASE_DIR"/*/; do
         [ -d "$dir" ] || continue
         dir="${dir%/}"
         folder_name="${dir##*/}"
+
+        # Skip if already processed in priority phase
+        case "$PROCESSED_DIRS" in
+            *"|${folder_name}|"*) continue ;;
+        esac
+
         if is_excluded "$folder_name"; then
             printf '%b------------------------------------------------%b\n' "${MAGENTA}" "${RESET}"
             printf '%bSkipping excluded folder:%b %b%s%b\n' \
@@ -460,6 +515,7 @@ else
             continue
         fi
         run_compose_in_dir "$dir" || true
+        PROCESSED_DIRS="${PROCESSED_DIRS}${folder_name}|"
     done
 fi
 
