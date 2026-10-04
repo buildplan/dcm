@@ -5,9 +5,10 @@ A POSIX-compliant shell script to manage Docker Compose projects across multiple
 
 ## Features
 
+- **Shell Autocompletion**: Native `<TAB>` autocompletion for Bash and Zsh (actions, flags, and smart project directories)
 - **Batch Operations**: Run `up`, `down`, `restart`, or `status` on multiple compose projects simultaneously
 - **Multi-File Support**: Automatically detects and merges standard compose files (`compose.yml`, `docker-compose.yml`) and pattern-based files (`compose-*.yml`)
-- **Interactive \& Non-Interactive Modes**: Prompt for directories or pass them as arguments
+- **Interactive & Non-Interactive Modes**: Prompt for directories or pass them as arguments
 - **Exclusion Filtering**: Skip specific directories during batch operations
 - **Dry-Run Mode**: Preview commands before execution
 - **Summary Reports**: See which directories succeeded or failed after execution
@@ -26,12 +27,18 @@ A POSIX-compliant shell script to manage Docker Compose projects across multiple
 
 ## Installation
 
-### Quick Install
+### Quick Install (One-Liner)
 
-Download directly to your system and make it executable:
+Download directly to your system, make executable, and configure shell tab completion:
 
 ```bash
-sudo curl -sSL https://raw.githubusercontent.com/buildplan/dcm/refs/heads/main/docker-compose-manager.sh -o /usr/local/bin/dcm && sudo chmod +x /usr/local/bin/dcm
+sudo curl -sSL https://raw.githubusercontent.com/buildplan/dcm/refs/heads/main/docker-compose-manager.sh -o /usr/local/bin/dcm && sudo chmod +x /usr/local/bin/dcm && sudo dcm --install-completion
+```
+
+Or via the installation script:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/buildplan/dcm/refs/heads/main/install.sh | sudo sh
 ```
 
 ### Manual Install
@@ -42,18 +49,23 @@ sudo curl -sSL https://raw.githubusercontent.com/buildplan/dcm/refs/heads/main/d
 curl -sSL https://raw.githubusercontent.com/buildplan/dcm/refs/heads/main/docker-compose-manager.sh -o dcm
 ```
 
-2. Make it executable:
+1. Make it executable:
 
 ```bash
 chmod +x dcm
 ```
 
-3. Move to a directory in your PATH:
+1. Move to a directory in your PATH:
 
 ```bash
 sudo mv dcm /usr/local/bin/
 ```
 
+1. Install shell autocompletion (optional, for Bash & Zsh):
+
+```bash
+sudo dcm --install-completion
+```
 
 ### Verify Installation
 
@@ -71,7 +83,6 @@ dcm --help
 dcm [OPTIONS] [ACTION] [DIR1 DIR2 ...]
 ```
 
-
 ### Actions
 
 - `up` - Start containers in detached mode
@@ -81,7 +92,7 @@ dcm [OPTIONS] [ACTION] [DIR1 DIR2 ...]
 - `logs` - Follow container logs
 - `status` - Show container status
 - `update` - Update this script to the latest version
-
+- `completion` - Generate shell autocompletion script (`bash`, `zsh`, or `install`)
 
 ### Options
 
@@ -91,7 +102,7 @@ dcm [OPTIONS] [ACTION] [DIR1 DIR2 ...]
 - `-y, --yes` - Skip confirmation prompts for destructive operations
 - `-p, --priority` - List of directories to start first (e.g., `-p "network proxy"`)
 - `-u, --update` - Update this script to the latest version from GitHub
-
+- `--install-completion` - Install tab completion for Bash and Zsh
 
 ### Interactive Mode
 
@@ -115,7 +126,6 @@ Pass directories as arguments:
 dcm down /home/user/projects/app1 /home/user/projects/app2
 ```
 
-
 ### Examples
 
 ```bash
@@ -134,6 +144,41 @@ dcm status /home/user/docker --exclude dir1 dir2
 # Use with cron (no colors, clean output)
 0 3 * * * /usr/local/bin/dcm down /home/user/backup-projects
 ```
+
+---
+
+## Shell Autocompletion
+
+`dcm` supports native `<TAB>` completion for **Bash** and **Zsh**.
+
+### What gets completed
+
+- **Actions**: `up`, `down`, `restart`, `status`, `pull`, `logs`, `update`, `completion`
+- **Flags**: `-h`, `--help`, `-v`, `--version`, `-n`, `--dry-run`, `-y`, `--yes`, `-p`, `--priority`, `-u`, `--update`, `--install-completion`
+- **Smart Directory Filter**: When typing `dcm up <TAB>`, only subdirectories that actually contain Docker Compose files are suggested!
+- **Priority Directories**: Completes directories after `-p` or `--priority`.
+
+### Automatic Setup
+
+```bash
+sudo dcm --install-completion
+```
+
+### Manual Setup (if desired)
+
+- **Bash**:
+
+  ```bash
+  dcm completion bash | sudo tee /etc/bash_completion.d/dcm > /dev/null
+  # or add to ~/.bashrc:
+  source <(dcm completion bash)
+  ```
+
+- **Zsh**:
+
+  ```bash
+  dcm completion zsh | sudo tee /usr/local/share/zsh/site-functions/_dcm > /dev/null
+  ```
 
 ---
 

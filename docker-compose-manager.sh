@@ -109,6 +109,228 @@ update_script() {
     exit 0
 }
 
+# --- Shell Autocompletion ---
+generate_bash_completion() {
+    cat <<'EOF'
+# Bash completion for dcm / docker-compose-manager.sh
+_dcm_completions() {
+    local cur prev words cword
+    if declare -F _init_completion >/dev/null 2>&1; then
+        _init_completion || return
+    else
+        COMPREPLY=()
+        cur="${COMP_WORDS[COMP_CWORD]}"
+        prev="${COMP_WORDS[COMP_CWORD-1]}"
+        words=("${COMP_WORDS[@]}")
+        cword=$COMP_CWORD
+    fi
+
+    local actions="up down restart status pull logs update completion"
+    local options="-h --help -v --version -n --dry-run -y --yes -p --priority -u --update --install-completion"
+
+    # Complete after -p or --priority
+    if [ "$prev" = "-p" ] || [ "$prev" = "--priority" ]; then
+        COMPREPLY=( $(compgen -d -- "$cur") )
+        return 0
+    fi
+
+    # Sub-arguments for completion action
+    local is_completion=0
+    local i
+    for ((i=1; i<cword; i++)); do
+        if [ "${words[i]}" = "completion" ]; then
+            is_completion=1
+            break
+        fi
+    done
+    if [ "$is_completion" -eq 1 ]; then
+        COMPREPLY=( $(compgen -W "bash zsh install" -- "$cur") )
+        return 0
+    fi
+
+    # Check if an action is already in arguments
+    local action=""
+    for ((i=1; i<cword; i++)); do
+        case "${words[i]}" in
+            up|down|restart|status|pull|logs|update)
+                action="${words[i]}"
+                break
+                ;;
+        esac
+    done
+
+    # If completing a flag
+    if [[ "$cur" == -* ]]; then
+        COMPREPLY=( $(compgen -W "$options" -- "$cur") )
+        return 0
+    fi
+
+    # If no action chosen yet, offer actions and options
+    if [ -z "$action" ]; then
+        COMPREPLY=( $(compgen -W "$actions $options" -- "$cur") )
+        return 0
+    fi
+
+    # If action is specified, complete project directories containing compose files
+    local comp_dirs=""
+    local dir
+    local base_path="."
+    if [[ "$cur" == */* ]]; then
+        base_path="${cur%/*}"
+    fi
+
+    for dir in "$base_path"/*/; do
+        [ -d "$dir" ] || continue
+        local clean_dir="${dir%/}"
+        clean_dir="${clean_dir#./}"
+        for pattern in "$dir"compose*.yml "$dir"compose*.yaml "$dir"docker-compose*.yml "$dir"docker-compose*.yaml "$dir"*compose.yml "$dir"*compose.yaml; do
+            if [ -f "$pattern" ]; then
+                comp_dirs="$comp_dirs $clean_dir"
+                break
+            fi
+        done
+    done
+
+    if [ -n "$comp_dirs" ]; then
+        COMPREPLY=( $(compgen -W "$comp_dirs" -- "$cur") )
+    else
+        COMPREPLY=( $(compgen -d -- "$cur") )
+    fi
+}
+complete -F _dcm_completions dcm docker-compose-manager.sh
+EOF
+}
+
+generate_zsh_completion() {
+    cat <<'EOF'
+#compdef dcm docker-compose-manager.sh
+
+_dcm_compose_dirs() {
+    local -a dirs
+    local d
+    for d in *(/); do
+        if [[ -n $(ls -1 "$d"/(compose*.yml|compose*.yaml|docker-compose*.yml|docker-compose*.yaml|*compose.yml|*compose.yaml) 2>/dev/null) ]]; then
+            dirs+=("$d")
+        fi
+    done
+    if (( ${#dirs} > 0 )); then
+        _describe 'compose directory' dirs
+    else
+        _directories
+    fi
+}
+
+_dcm() {
+    local -a actions
+    actions=(
+        'up:Start containers in detached mode'
+        'down:Stop and remove containers'
+        'restart:Restart containers (down + up)'
+        'pull:Pull the latest images for the services'
+        'logs:Follow container logs'
+        'status:Show container status'
+        'update:Update this script to latest version'
+        'completion:Generate shell autocompletion script'
+    )
+
+    _arguments -s -S \
+        '(-h --help)'{-h,--help}'[Show help message and exit]' \
+        '(-v --version)'{-v,--version}'[Show version and exit]' \
+        '(-n --dry-run)'{-n,--dry-run}'[Show what would be done without executing]' \
+        '(-y --yes)'{-y,--yes}'[Skip confirmation prompts]' \
+        '(-p --priority)'{-p,--priority}'[Directories to start first]:directories:_directories' \
+        '(-u --update)'{-u,--update}'[Update this script to latest version]' \
+        '--install-completion[Install tab completion for bash and zsh]' \
+        '1:action:->action' \
+        '*:directory:->dir' && return 0
+
+    case "$state" in
+        action)
+            _describe -t actions 'action' actions
+            ;;
+        dir)
+            case "${words[2]}" in
+                completion)
+                    local -a shells
+                    shells=('bash:Generate Bash completion' 'zsh:Generate Zsh completion' 'install:Install shell completion')
+                    _describe -t shells 'shell' shells
+                    ;;
+                *)
+                    _dcm_compose_dirs
+                    ;;
+            esac
+            ;;
+    esac
+}
+
+_dcm "$@"
+EOF
+}
+
+install_completion() {
+    installed=0
+    bash_done=0
+
+    # 1. System-wide bash completion directories (requires root/sudo or write permission)
+    for target in "/etc/bash_completion.d/dcm" "/usr/share/bash-completion/completions/dcm" "/usr/local/share/bash-completion/completions/dcm" "/opt/homebrew/etc/bash_completion.d/dcm"; do
+        target_dir="${target%/*}"
+        if [ -d "$target_dir" ] && [ -w "$target_dir" ]; then
+            if generate_bash_completion > "$target" 2>/dev/null; then
+                printf '%bSuccess:%b Installed Bash completion to %b%s%b\n' "${GREEN}" "${RESET}" "${CYAN}" "$target" "${RESET}"
+                bash_done=1
+                installed=1
+                break
+            fi
+        fi
+    done
+
+    # 2. User-level bash completion directory (works without sudo on modern systems)
+    if [ "$bash_done" -eq 0 ]; then
+        user_bash_dir="${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions"
+        if (mkdir -p "$user_bash_dir" 2>/dev/null) && [ -w "$user_bash_dir" ]; then
+            if generate_bash_completion > "$user_bash_dir/dcm" 2>/dev/null; then
+                printf '%bSuccess:%b Installed user Bash completion to %b%s%b\n' "${GREEN}" "${RESET}" "${CYAN}" "$user_bash_dir/dcm" "${RESET}"
+                bash_done=1
+                installed=1
+            fi
+        fi
+    fi
+
+    # 3. Zsh system-wide site-functions
+    for zsh_target in "/usr/local/share/zsh/site-functions/_dcm" "/opt/homebrew/share/zsh/site-functions/_dcm" "/usr/share/zsh/site-functions/_dcm"; do
+        zsh_dir="${zsh_target%/*}"
+        if [ -d "$zsh_dir" ] && [ -w "$zsh_dir" ]; then
+            if generate_zsh_completion > "$zsh_target" 2>/dev/null; then
+                printf '%bSuccess:%b Installed Zsh completion to %b%s%b\n' "${GREEN}" "${RESET}" "${CYAN}" "$zsh_target" "${RESET}"
+                installed=1
+                break
+            fi
+        fi
+    done
+
+    # 4. Zsh user-level directory if custom zfunc or oh-my-zsh exists
+    if [ -d "${HOME}/.zfunc" ] && [ -w "${HOME}/.zfunc" ]; then
+        if generate_zsh_completion > "${HOME}/.zfunc/_dcm" 2>/dev/null; then
+            printf '%bSuccess:%b Installed user Zsh completion to %b%s%b\n' "${GREEN}" "${RESET}" "${CYAN}" "${HOME}/.zfunc/_dcm" "${RESET}"
+            installed=1
+        fi
+    fi
+
+    if [ "$installed" -eq 0 ]; then
+        printf '%bWarning:%b Could not automatically write completion files (permission denied or no standard directory found).\n' "${YELLOW}" "${RESET}" >&2
+        printf 'To install system-wide with sudo, run:\n' >&2
+        printf '  %bsudo %s --install-completion%b\n\n' "${CYAN}" "$SCRIPT_NAME" "${RESET}" >&2
+        printf 'Or manually add Bash completion to ~/.bashrc:\n' >&2
+        printf '  %bsource <(%s completion bash)%b\n' "${CYAN}" "$SCRIPT_NAME" "${RESET}" >&2
+        return 1
+    fi
+
+    printf '%bInfo:%b Shell completion installed successfully.\n' "${BLUE}" "${RESET}"
+    # shellcheck disable=SC2016
+    printf 'Open a new terminal session or run: %bexec $SHELL%b to activate.\n' "${CYAN}" "${RESET}"
+    return 0
+}
+
 # --- Help and version ---
 print_help() {
     printf '%b%bUsage:%b\n' "${BOLD}" "${CYAN}" "${RESET}"
@@ -136,6 +358,7 @@ EOF
   -y, --yes         Skip confirmation prompts for destructive operations.
   -p, --priority    List of directories to start first (e.g., -p "network proxy").
   -u, --update      Update this script to the latest version from GitHub.
+  --install-completion Install shell completion for bash and zsh.
 EOF
 
     printf '\n%b%bActions:%b\n' "${BOLD}" "${CYAN}" "${RESET}"
@@ -147,6 +370,7 @@ EOF
   logs              Follow container logs (Ctrl+C moves to next dir).
   status            Show container status (docker compose ps).
   update            Update this script to the latest version from GitHub.
+  completion        Generate or install shell completion (bash/zsh/install).
 EOF
 
     printf '\n%b%bExamples:%b\n' "${BOLD}" "${CYAN}" "${RESET}"
@@ -155,6 +379,8 @@ EOF
   ./$SCRIPT_NAME down dir1 dir2
   ./$SCRIPT_NAME --dry-run restart
   ./$SCRIPT_NAME status ./my-app
+  ./$SCRIPT_NAME --install-completion
+  ./$SCRIPT_NAME completion bash
 EOF
 }
 
@@ -356,8 +582,6 @@ confirm_action() {
 }
 
 # --- Argument parsing ---
-check_dependency
-
 ACTION=""
 EXCLUDES_INPUT=""
 
@@ -378,6 +602,7 @@ while [ "$#" -gt 0 ]; do
             fi
             ;;
         -u|--update)  update_script ;;
+        --install-completion) install_completion; exit 0 ;;
         -*)
             printf '%bError:%b unknown option %b%s%b\n' \
                 "${RED}" "${RESET}" "${CYAN}" "$1" "${RESET}" >&2
@@ -410,9 +635,29 @@ fi
 
 # Validate action
 case "$ACTION" in
-    up|down|restart|status|pull|logs|update)
+    up|down|restart|status|pull|logs|update|completion)
         if [ "$ACTION" = "update" ]; then
             update_script
+        fi
+        if [ "$ACTION" = "completion" ]; then
+            case "${1:-}" in
+                bash)
+                    generate_bash_completion
+                    exit 0
+                    ;;
+                zsh)
+                    generate_zsh_completion
+                    exit 0
+                    ;;
+                install)
+                    install_completion
+                    exit 0
+                    ;;
+                *)
+                    printf '%bUsage:%b %s completion [bash|zsh|install]\n' "${BOLD}" "${RESET}" "$SCRIPT_NAME"
+                    exit 1
+                    ;;
+            esac
         fi
         ;;
     *)
@@ -422,6 +667,9 @@ case "$ACTION" in
         exit 1
         ;;
 esac
+
+# Verify Docker environment before executing compose actions
+check_dependency
 
 # --- Execution ---
 if [ "$#" -gt 0 ]; then
