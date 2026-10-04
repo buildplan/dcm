@@ -14,7 +14,7 @@ set -eu
 export LC_ALL=C
 
 SCRIPT_NAME="${0##*/}"
-VERSION="0.4.0"
+VERSION="0.5.0"
 UPDATE_URL="https://raw.githubusercontent.com/buildplan/dcm/refs/heads/main/docker-compose-manager.sh"
 
 # --- Terminal color support detection ---
@@ -206,10 +206,12 @@ generate_zsh_completion() {
 #compdef dcm docker-compose-manager.sh
 
 _dcm_compose_dirs() {
-    local -a dirs
+    local -a dirs hits
     local d
-    for d in *(/); do
-        if [[ -n $(ls -1 "$d"/(compose*.yml|compose*.yaml|docker-compose*.yml|docker-compose*.yaml|*compose.yml|*compose.yaml) 2>/dev/null) ]]; then
+    # (N) = null glob: no error output when a directory has no compose file
+    for d in *(/N); do
+        hits=( "$d"/(compose*.yml|compose*.yaml|docker-compose*.yml|docker-compose*.yaml|*compose.yml|*compose.yaml)(N) )
+        if (( ${#hits} > 0 )); then
             dirs+=("$d")
         fi
     done
@@ -249,7 +251,7 @@ _dcm() {
             _describe -t actions 'action' actions
             ;;
         dir)
-            case "${words[2]}" in
+            case "${line[1]}" in
                 completion)
                     local -a shells
                     shells=('bash:Generate Bash completion' 'zsh:Generate Zsh completion' 'install:Install shell completion')
@@ -285,8 +287,12 @@ install_completion() {
     done
 
     # 2. User-level bash completion directory (works without sudo on modern systems)
-    if [ "$bash_done" -eq 0 ]; then
-        user_bash_dir="${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions"
+    user_data_dir="${XDG_DATA_HOME:-}"
+    if [ -z "$user_data_dir" ] && [ -n "${HOME:-}" ]; then
+        user_data_dir="${HOME}/.local/share"
+    fi
+    if [ "$bash_done" -eq 0 ] && [ -n "$user_data_dir" ]; then
+        user_bash_dir="${user_data_dir}/bash-completion/completions"
         if (mkdir -p "$user_bash_dir" 2>/dev/null) && [ -w "$user_bash_dir" ]; then
             if generate_bash_completion > "$user_bash_dir/dcm" 2>/dev/null; then
                 printf '%bSuccess:%b Installed user Bash completion to %b%s%b\n' "${GREEN}" "${RESET}" "${CYAN}" "$user_bash_dir/dcm" "${RESET}"
@@ -308,8 +314,8 @@ install_completion() {
         fi
     done
 
-    # 4. Zsh user-level directory if custom zfunc or oh-my-zsh exists
-    if [ -d "${HOME}/.zfunc" ] && [ -w "${HOME}/.zfunc" ]; then
+    # 4. Zsh user-level directory if ~/.zfunc already exists
+    if [ -n "${HOME:-}" ] && [ -d "${HOME}/.zfunc" ] && [ -w "${HOME}/.zfunc" ]; then
         if generate_zsh_completion > "${HOME}/.zfunc/_dcm" 2>/dev/null; then
             printf '%bSuccess:%b Installed user Zsh completion to %b%s%b\n' "${GREEN}" "${RESET}" "${CYAN}" "${HOME}/.zfunc/_dcm" "${RESET}"
             installed=1
@@ -358,7 +364,8 @@ EOF
   -y, --yes         Skip confirmation prompts for destructive operations.
   -p, --priority    List of directories to start first (e.g., -p "network proxy").
   -u, --update      Update this script to the latest version from GitHub.
-  --install-completion Install shell completion for bash and zsh.
+  --install-completion
+                    Install shell completion for bash and zsh.
 EOF
 
     printf '\n%b%bActions:%b\n' "${BOLD}" "${CYAN}" "${RESET}"
