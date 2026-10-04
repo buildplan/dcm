@@ -43,25 +43,25 @@ curl -sSL https://raw.githubusercontent.com/buildplan/dcm/refs/heads/main/instal
 
 ### Manual Install
 
-1. Download the script:
+1\. Download the script:
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/buildplan/dcm/refs/heads/main/docker-compose-manager.sh -o dcm
 ```
 
-1. Make it executable:
+2\. Make it executable:
 
 ```bash
 chmod +x dcm
 ```
 
-1. Move to a directory in your PATH:
+3\. Move to a directory in your PATH:
 
 ```bash
 sudo mv dcm /usr/local/bin/
 ```
 
-1. Install shell autocompletion (optional, for Bash & Zsh):
+4\. Install shell autocompletion (optional, for Bash & Zsh):
 
 ```bash
 sudo dcm --install-completion
